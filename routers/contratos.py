@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Contrato
-from schemas_contratos import ContratoCreate, ContratoUpdate, ContratoOut
+from schemas import ContratoCreate, ContratoUpdate, ContratoOut
 
 
 router = APIRouter(prefix="/contratos", tags=["Contratos"])
