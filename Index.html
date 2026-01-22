@@ -11,6 +11,7 @@
     var USER_AUTHORIZED = false;
     var USER_EMAIL = "";
     var ALLOWED_DOMAIN = "humboldt.org.co";
+    var API_BASE_URL = "";
 
     window.onload = function () {
       // Ocultar todo al inicio
@@ -63,6 +64,25 @@
       localStorage.setItem("user_email", email);
     }
 
+    function cargarApiBaseUrl() {
+      return localStorage.getItem("api_base_url") || API_BASE_URL || "";
+    }
+
+    function guardarApiBaseUrl(url) {
+      localStorage.setItem("api_base_url", url);
+    }
+
+    function solicitarApiBaseUrl() {
+      var url = prompt("Ingresa la URL del backend (Cloud Run), ej: https://bosque-api-xyz.a.run.app");
+      if (!url) return "";
+      url = String(url).trim().replace(/\/+$/, "");
+      if (!url.startsWith("http")) {
+        return "";
+      }
+      guardarApiBaseUrl(url);
+      return url;
+    }
+
     function solicitarEmail() {
       var email = prompt("Ingresa tu correo corporativo:");
       if (!email) return "";
@@ -82,6 +102,11 @@
     }
 
     function apiFetch(path, options) {
+      var apiBaseUrl = cargarApiBaseUrl();
+      if (!apiBaseUrl && path && path.indexOf("http") !== 0) {
+        apiBaseUrl = solicitarApiBaseUrl();
+      }
+
       var email = USER_EMAIL || cargarEmail();
       if (!email) {
         email = solicitarEmail();
@@ -97,7 +122,12 @@
         "X-User-Email": email
       });
 
-      return fetch(path, finalOptions).then(function (res) {
+      var targetUrl = path;
+      if (apiBaseUrl && path && path.indexOf("http") !== 0) {
+        targetUrl = apiBaseUrl + path;
+      }
+
+      return fetch(targetUrl, finalOptions).then(function (res) {
         return res.json().catch(function () { return {}; }).then(function (payload) {
           if (!res.ok) {
             if (res.status === 401 || res.status === 403) {

@@ -23,8 +23,10 @@ gcloud artifacts repositories create bosque-api \
 ```bash
 gcloud builds submit \
   --region=southamerica-east1 \
-  --tag southamerica-east1-docker.pkg.dev/PROYECTO/bosque-api/bosque-api:latest
+  --tag southamerica-east1-docker.pkg.dev/PROYECTO/bosque-api/bosque-api:latest \
+  .
 ```
+> **Importante:** ejecuta el comando desde la carpeta del repo (donde vive el `Dockerfile`) o ajusta la ruta final por el directorio correcto.
 
 ### 1.3 Desplegar Cloud Run con Cloud SQL
 > Sustituye `PROYECTO` y el nombre de la instancia (`CONNECTION_NAME`).
@@ -64,6 +66,9 @@ gsutil iam ch allUsers:objectViewer gs://bosque-frontend
 
 ## 3) Conectar frontend con backend
 - En el navegador, el frontend solicitará el correo corporativo y lo enviará como `X-User-Email`.
+- La primera vez también pedirá la **URL del backend** (Cloud Run), por ejemplo:
+  - `https://bosque-api-xyz.a.run.app`
+  - Ese valor se guarda en `localStorage` como `api_base_url`.
 - Configura `CORS_ORIGINS` en Cloud Run para permitir el dominio del bucket.
   - Ejemplo: `CORS_ORIGINS=https://storage.googleapis.com` o el dominio del website bucket.
 
