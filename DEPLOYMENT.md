@@ -59,6 +59,12 @@ gsutil web set -m Index.html -e Index.html gs://bosque-frontend
 gsutil cp Index.html app.css gs://bosque-frontend
 ```
 
+### 2.3.1 Forzar UTF-8 en el HTML (recomendado)
+Si ves tildes o emojis dañados, asegura el `Content-Type` con charset UTF-8:
+```bash
+gsutil setmeta -h "Content-Type:text/html; charset=utf-8" gs://bosque-frontend/Index.html
+```
+
 ### 2.4 Hacer público el bucket (opcional en pruebas)
 ```bash
 gsutil iam ch allUsers:objectViewer gs://bosque-frontend
