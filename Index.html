@@ -40,6 +40,15 @@
         return;
       }
 
+      var apiBaseUrl = cargarApiBaseUrl();
+      if (!apiBaseUrl) {
+        apiBaseUrl = solicitarApiBaseUrl();
+        if (!apiBaseUrl) {
+          mostrarAccesoDenegado("Debes ingresar la URL del backend para continuar.");
+          return;
+        }
+      }
+
       USER_EMAIL = email;
       USER_AUTHORIZED = true;
       document.getElementById("paginaInicio").style.display = "block";
