@@ -137,13 +137,13 @@
 
     function inicializarLoginGoogle() {
       if (!window.google || !google.accounts || !google.accounts.id) {
-        setLoginMessage("No se pudo cargar Google Sign-In. Intenta recargar la página.");
+        setLoginMessage("No se pudo cargar Google Sign-In. Verifica bloqueadores de anuncios y recarga la página.");
         return;
       }
 
       var clientId = cargarGoogleClientId();
-      if (!clientId) {
-        setLoginMessage("Falta configurar el Client ID de Google para iniciar sesión.");
+      if (!clientId || clientId.indexOf("TU_CLIENT_ID") !== -1) {
+        setLoginMessage("Configura un Client ID real de Google (no uses TU_CLIENT_ID) para iniciar sesión.");
         return;
       }
 

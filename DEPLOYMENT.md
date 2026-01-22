@@ -78,7 +78,8 @@ gsutil iam ch allUsers:objectViewer gs://bosque-frontend
   - Ese valor se guarda en `localStorage` como `api_base_url`.
 - Configura `CORS_ORIGINS` en Cloud Run para permitir el dominio del bucket.
   - Ejemplo: `CORS_ORIGINS=https://storage.googleapis.com` o el dominio del website bucket.
-- Para el inicio de sesión con Google, configura el Client ID en `Index.html` (variable `GOOGLE_CLIENT_ID`) o guarda el valor en `localStorage` con la clave `google_client_id`.
+- Para el inicio de sesión con Google, configura el Client ID real en `Index.html` (variable `GOOGLE_CLIENT_ID`) o guarda el valor en `localStorage` con la clave `google_client_id`.
+- Si ves errores como “The given client ID is not found”, revisa que el Client ID exista y que el dominio del frontend esté autorizado en Google Cloud Console.
 
 ## 4) Siguientes pasos recomendados
 - Activar Google Identity Platform (login real con cuentas corporativas).
