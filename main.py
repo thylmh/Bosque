@@ -11,13 +11,10 @@ from google.cloud.sql.connector import Connector
 app = FastAPI()
 
 ALLOWED_DOMAIN = os.environ.get("ALLOWED_DOMAIN", "humboldt.org.co").lower()
+admin_emails_raw = os.environ.get("ADMIN_EMAILS", "")
 ADMIN_EMAILS = {
     email.strip().lower()
-    for email in os.environ.get(
-        "ADMIN_EMAILS",
-        "rbetancur@humboldt.org.co,aplicaciones@humboldt.org.co, "
-        "hbettin@humboldt.org.co",
-    ).split(",")
+    for email in admin_emails_raw.split(",")
     if email.strip()
 }
 
@@ -67,7 +64,7 @@ def get_current_user(
     email = x_user_email.strip().lower()
     if not email.endswith(f"@{ALLOWED_DOMAIN}"):
         raise HTTPException(status_code=403, detail="Dominio no autorizado.")
-    if email not in ADMIN_EMAILS:
+    if ADMIN_EMAILS and email not in ADMIN_EMAILS:
         raise HTTPException(status_code=403, detail="Usuario no autorizado.")
     return {"email": email, "role": "admin"}
 

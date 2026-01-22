@@ -41,6 +41,7 @@ gcloud run deploy bosque-api \
 ```
 
 > **Nota:** ajusta `CORS_ORIGINS` al dominio del bucket cuando esté publicado el frontend.
+> **Nota:** si quieres permitir a cualquier usuario del dominio, deja `ADMIN_EMAILS` vacío.
 
 ## 2) Frontend (Index.html + app.css) en Cloud Storage
 
@@ -71,12 +72,13 @@ gsutil iam ch allUsers:objectViewer gs://bosque-frontend
 ```
 
 ## 3) Conectar frontend con backend
-- En el navegador, el frontend solicitará el correo corporativo y lo enviará como `X-User-Email`.
+- En el navegador, el frontend pedirá iniciar sesión con Google y enviará el correo corporativo como `X-User-Email`.
 - La primera vez también pedirá la **URL del backend** (Cloud Run), por ejemplo:
   - `https://bosque-api-xyz.a.run.app`
   - Ese valor se guarda en `localStorage` como `api_base_url`.
 - Configura `CORS_ORIGINS` en Cloud Run para permitir el dominio del bucket.
   - Ejemplo: `CORS_ORIGINS=https://storage.googleapis.com` o el dominio del website bucket.
+- Para el inicio de sesión con Google, configura el Client ID en `Index.html` (variable `GOOGLE_CLIENT_ID`) o guarda el valor en `localStorage` con la clave `google_client_id`.
 
 ## 4) Siguientes pasos recomendados
 - Activar Google Identity Platform (login real con cuentas corporativas).
