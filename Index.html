@@ -9,46 +9,15 @@
   <script>
     // ==================== VARIABLES GLOBALES ====================
     var USER_AUTHORIZED = false;
+    var USER_EMAIL = "";
+    var ALLOWED_DOMAIN = "humboldt.org.co";
 
     window.onload = function () {
       // Ocultar todo al inicio
       document.getElementById("paginaInicio").style.display = "none";
       document.getElementById("seccionConsulta").style.display = "none";
       document.getElementById("vistaGlobal").style.display = "none";
-
-      google.script.run
-        .withSuccessHandler(function (user) {
-          if (user && user.authorized) {
-            USER_AUTHORIZED = true;
-            // Usuario autorizado: Mostrar página de inicio normal
-            document.getElementById("paginaInicio").style.display = "block";
-
-            // Habilitar botones
-            var btns = document.querySelectorAll(".menu-card");
-            btns.forEach(function (btn) { btn.classList.remove("disabled"); });
-
-            // Opcional: Mostrar correo usuario
-            if (document.getElementById("userEmail")) {
-              document.getElementById("userEmail").textContent = user.email || "Desconocido";
-            }
-
-            // Cargar catálogos
-            asegurarCatalogos().then(function () {
-              poblarSelects();
-            });
-
-          } else {
-            // Usuario NO autorizado
-            USER_AUTHORIZED = false;
-            document.getElementById("paginaInicio").style.display = "none";
-            document.getElementById("vistaAccesoDenegado").style.display = "flex";
-            document.getElementById("msgDenegado").textContent = "No tienes permiso para acceder a esta aplicación (" + (user ? user.email : "Desconocido") + ").";
-          }
-        })
-        .withFailureHandler(function (err) {
-          alert("Error de conexión: " + err);
-        })
-        .getLoggedUser();
+      inicializarSesion();
     };
 
     var CATS = { proyectos: [], fuentes: [], componentes: [], subcomponentes: [], categorias: [], responsables: [] };
@@ -59,6 +28,87 @@
     var CATALOGOS_CARGADOS = false;
     var DATOS_ACTUAL = null;
     var MENSUALIZADO_GLOBAL_CACHE = null;
+
+    function inicializarSesion() {
+      var email = cargarEmail();
+      if (!email) {
+        email = solicitarEmail();
+      }
+      if (!email) {
+        mostrarAccesoDenegado("No se proporcionó un correo válido.");
+        return;
+      }
+
+      USER_EMAIL = email;
+      USER_AUTHORIZED = true;
+      document.getElementById("paginaInicio").style.display = "block";
+
+      var btns = document.querySelectorAll(".menu-card");
+      btns.forEach(function (btn) { btn.classList.remove("disabled"); });
+
+      if (document.getElementById("userEmail")) {
+        document.getElementById("userEmail").textContent = email || "Desconocido";
+      }
+
+      asegurarCatalogos().then(function () {
+        poblarSelects();
+      });
+    }
+
+    function cargarEmail() {
+      return localStorage.getItem("user_email") || "";
+    }
+
+    function guardarEmail(email) {
+      localStorage.setItem("user_email", email);
+    }
+
+    function solicitarEmail() {
+      var email = prompt("Ingresa tu correo corporativo:");
+      if (!email) return "";
+      email = String(email).trim().toLowerCase();
+      if (!email.endsWith("@" + ALLOWED_DOMAIN)) {
+        return "";
+      }
+      guardarEmail(email);
+      return email;
+    }
+
+    function mostrarAccesoDenegado(mensaje) {
+      USER_AUTHORIZED = false;
+      document.getElementById("paginaInicio").style.display = "none";
+      document.getElementById("vistaAccesoDenegado").style.display = "flex";
+      document.getElementById("msgDenegado").textContent = mensaje || "No tienes permiso para acceder a esta aplicación.";
+    }
+
+    function apiFetch(path, options) {
+      var email = USER_EMAIL || cargarEmail();
+      if (!email) {
+        email = solicitarEmail();
+        if (!email) {
+          mostrarAccesoDenegado("Debes ingresar un correo corporativo válido.");
+          return Promise.reject(new Error("Correo requerido"));
+        }
+      }
+
+      var finalOptions = options || {};
+      finalOptions.headers = Object.assign({}, finalOptions.headers, {
+        "Content-Type": "application/json",
+        "X-User-Email": email
+      });
+
+      return fetch(path, finalOptions).then(function (res) {
+        return res.json().catch(function () { return {}; }).then(function (payload) {
+          if (!res.ok) {
+            if (res.status === 401 || res.status === 403) {
+              mostrarAccesoDenegado(payload.detail || "Acceso denegado.");
+            }
+            throw new Error(payload.detail || "Error de servidor.");
+          }
+          return payload;
+        });
+      });
+    }
 
     // ==================== NAVEGACIÓN ====================
     function irAConsultaEmpleado() {
@@ -237,19 +287,8 @@
           return;
         }
 
-        google.script.run
-          .withSuccessHandler(function (data) {
-            hydrateCatalogs(data);
-            setCatalogCache_(data);
-            CATALOGOS_CARGADOS = true;
-            resolve(data);
-          })
-          .withFailureHandler(function (err) {
-            console.warn("Error cargando catálogos:", err);
-            CATALOGOS_CARGADOS = true;
-            resolve(CATS);
-          })
-          .getCatalogosFinanciacion();
+        CATALOGOS_CARGADOS = true;
+        resolve(CATS);
       });
     }
 
@@ -265,12 +304,17 @@
       btn.textContent = "Consultando...";
 
       function ejecutarConsulta() {
-        google.script.run
-          .withSuccessHandler(function (res) {
+        apiFetch("/api/consulta/" + encodeURIComponent(cedula))
+          .then(function (res) {
             btn.disabled = false;
             btn.textContent = "🔍 Buscar";
-            if (!res || !res.ok) { setMsg(res?.message || "Error", "warn"); return; }
 
+            if (!res || !res.ok) {
+              setMsg(res && res.message ? res.message : "Error", "warn");
+              return;
+            }
+
+            res.tramos = normalizarTramos(res.tramos || []);
             DATOS_ACTUAL = res;
             document.getElementById("tabNavigation").style.display = "block";
             showSections(true);
@@ -283,12 +327,11 @@
             setMsg("✅ Datos cargados: " + res.tramos.length + " tramo(s)", "ok");
             console.log("✅ Búsqueda exitosa");
           })
-          .withFailureHandler(function (err) {
+          .catch(function (err) {
             btn.disabled = false;
             btn.textContent = "🔍 Buscar";
-            setMsg("Error: " + err, "err");
-          })
-          .getVistaFinanciacion({ cedula: cedula });
+            setMsg("Error: " + err.message, "err");
+          });
       }
 
       asegurarCatalogos()
@@ -297,6 +340,27 @@
           console.warn("Catálogos no disponibles, continuando sin ellos:", e);
           ejecutarConsulta();
         });
+    }
+
+    function normalizarTramos(tramos) {
+      return (tramos || []).map(function (t) {
+        return {
+          id: t.id_financiacion || t.id,
+          contrato: t.id_contrato || t.contrato,
+          posicion: t.posicion,
+          fechaInicio: t.fecha_inicio || t.fechaInicio,
+          fechaFin: t.fecha_fin || t.fechaFin,
+          salarioEditable: t.salario_base || t.salarioEditable,
+          salarioCalculado: t.salario_t || t.salarioCalculado,
+          rubro: t.rubro || "",
+          proyecto: t.id_proyecto || t.proyecto,
+          fuente: t.id_fuente || t.fuente,
+          componente: t.id_componente || t.componente,
+          subcomponente: t.id_subcomponente || t.subcomponente,
+          categoria: t.id_categoria || t.categoria,
+          responsable: t.id_responsable || t.responsable
+        };
+      });
     }
 
     function renderEmpleadoSimple(emp, con) {
@@ -557,33 +621,12 @@
       var msgDiv = document.getElementById("msgGlobal");
       var btnCargar = event.target;
 
-      msgDiv.innerHTML = "⏳ Cargando datos de toda la organización...";
-      msgDiv.className = "msg";
+      msgDiv.innerHTML = "⚠️ El dashboard global está en migración.";
+      msgDiv.className = "msg warn";
       msgDiv.style.display = "block";
-      btnCargar.disabled = true;
-      btnCargar.textContent = "Cargando...";
+      btnCargar.disabled = false;
+      btnCargar.textContent = "📊 Cargar Dashboard Global";
       container.innerHTML = "";
-
-      google.script.run
-        .withSuccessHandler(function (res) {
-          btnCargar.disabled = false;
-          btnCargar.textContent = "🔄 Recargar Dashboard Global";
-
-          if (res && res.ok) {
-            generarDashboardGlobal(res.data);
-            msgDiv.style.display = "none";
-          } else {
-            msgDiv.innerHTML = "❌ Error: " + (res?.message || "Sin datos");
-            msgDiv.className = "msg err";
-          }
-        })
-        .withFailureHandler(function (err) {
-          btnCargar.disabled = false;
-          btnCargar.textContent = "📊 Cargar Dashboard Global";
-          msgDiv.innerHTML = "❌ Error: " + err;
-          msgDiv.className = "msg err";
-        })
-        .getDashboardGlobal();
     }
 
     function generarDashboardGlobal(data) {
@@ -713,20 +756,7 @@
         container.innerHTML = "<div class='msg warn'>Selecciona un proyecto válido.</div>";
         return;
       }
-      container.innerHTML = "⏳ Cargando detalle del proyecto...";
-
-      google.script.run
-        .withSuccessHandler(function (res) {
-          if (!res || !res.ok) {
-            container.innerHTML = "<div class='msg err'>❌ Error: " + (res?.message || "Sin datos") + "</div>";
-            return;
-          }
-          renderDetalleProyectoGlobal(res.data);
-        })
-        .withFailureHandler(function (err) {
-          container.innerHTML = "<div class='msg err'>❌ Error: " + err + "</div>";
-        })
-        .getDashboardDetalleProyecto({ proyecto: proyecto });
+      container.innerHTML = "<div class='msg warn'>Detalle de proyecto en migración.</div>";
     }
 
     function renderDetalleProyectoGlobal(data) {
@@ -798,20 +828,7 @@
 
     function cargarEmpleadosGlobal() {
       var container = document.getElementById("empleadosGlobalContainer");
-      container.innerHTML = "⏳ Cargando empleados globales...";
-
-      google.script.run
-        .withSuccessHandler(function (res) {
-          if (!res || !res.ok) {
-            container.innerHTML = "<div class='msg err'>❌ Error: " + (res?.message || "Sin datos") + "</div>";
-            return;
-          }
-          renderEmpleadosGlobal(res.data);
-        })
-        .withFailureHandler(function (err) {
-          container.innerHTML = "<div class='msg err'>❌ Error: " + err + "</div>";
-        })
-        .getDashboardEmpleadosGlobal();
+      container.innerHTML = "<div class='msg warn'>Módulo de empleados globales en migración.</div>";
     }
 
     function renderEmpleadosGlobal(data) {
@@ -993,20 +1010,7 @@
     function cargarTotalesPorDireccion() {
       var container = document.getElementById("direccionTotalesContainer");
       if (!container) return;
-      container.innerHTML = "⏳ Cargando totales por dirección...";
-
-      google.script.run
-        .withSuccessHandler(function (res) {
-          if (!res || !res.ok) {
-            container.innerHTML = "<div class='msg err'>❌ Error: " + (res?.message || "Sin datos") + "</div>";
-            return;
-          }
-          renderTotalesPorDireccion(res.data);
-        })
-        .withFailureHandler(function (err) {
-          container.innerHTML = "<div class='msg err'>❌ Error: " + err + "</div>";
-        })
-        .getDashboardDireccionTotales();
+      container.innerHTML = "<div class='msg warn'>Totales por dirección en migración.</div>";
     }
 
     function renderTotalesPorDireccion(data) {
@@ -1306,26 +1310,21 @@
       var datos = {
         id: document.getElementById("formId").value,
         cedula: DATOS_ACTUAL.empleado.cedula,
-        contrato: DATOS_ACTUAL.cabecera ? DATOS_ACTUAL.cabecera.IDCONTRATO : "",
-        posicion: DATOS_ACTUAL.cabecera ? DATOS_ACTUAL.cabecera.POSICION : "",
         fechaInicio: document.getElementById("formFechaInicio").value,
         fechaFin: document.getElementById("formFechaFin").value,
         salario: document.getElementById("formSalario").value,
-        proyecto: document.getElementById("formProyecto").value,
-        rubro: document.getElementById("formRubro").value,
-        fuente: document.getElementById("formFuente").value,
-        componente: document.getElementById("formComponente").value,
-        subcomponente: document.getElementById("formSubcomponente").value,
-        categoria: document.getElementById("formCategoria").value,
-        responsable: document.getElementById("formResponsable").value
+        proyecto: document.getElementById("formProyecto").value
       };
 
       var btnGuardar = event.target;
       btnGuardar.disabled = true;
       btnGuardar.textContent = "Guardando...";
 
-      google.script.run
-        .withSuccessHandler(function (res) {
+      apiFetch("/api/guardar", {
+        method: "POST",
+        body: JSON.stringify(datos)
+      })
+        .then(function (res) {
           btnGuardar.disabled = false;
           btnGuardar.textContent = "💾 Guardar";
 
@@ -1336,12 +1335,11 @@
             alert("Error: " + (res?.message || "Error desconocido"));
           }
         })
-        .withFailureHandler(function (err) {
+        .catch(function (err) {
           btnGuardar.disabled = false;
           btnGuardar.textContent = "💾 Guardar";
-          alert("Error: " + err);
-        })
-        .guardarTramoFinanciacion(datos);
+          alert("Error: " + err.message);
+        });
     }
 
     function confirmarEliminar(id) {
@@ -1361,24 +1359,10 @@
       btnEliminar.disabled = true;
       btnEliminar.textContent = "Eliminando...";
 
-      google.script.run
-        .withSuccessHandler(function (res) {
-          btnEliminar.disabled = false;
-          btnEliminar.textContent = "🗑️ Eliminar";
-          cerrarModalConfirmar();
-
-          if (res && res.ok) {
-            buscar(); // Recargar datos
-          } else {
-            alert("Error: " + (res?.message || "Error desconocido"));
-          }
-        })
-        .withFailureHandler(function (err) {
-          btnEliminar.disabled = false;
-          btnEliminar.textContent = "🗑️ Eliminar";
-          alert("Error: " + err);
-        })
-        .eliminarTramoFinanciacion(ID_A_BORRAR);
+      btnEliminar.disabled = false;
+      btnEliminar.textContent = "🗑️ Eliminar";
+      cerrarModalConfirmar();
+      alert("La eliminación de tramos está en migración.");
     }
 
     function verDetalleMes(anioMes) {
@@ -1465,24 +1449,8 @@
     function cargarMensualizadoGlobal() {
       var msgDiv = document.getElementById("msgMensualizado");
       msgDiv.style.display = "block";
-      msgDiv.textContent = "⏳ Cargando datos...";
-      msgDiv.className = "msg";
-
-      google.script.run
-        .withSuccessHandler(function (res) {
-          if (res.ok) {
-            renderMensualizadoGlobal(res.data);
-            msgDiv.style.display = "none";
-          } else {
-            msgDiv.textContent = "❌ " + (res.message || "Error al cargar datos");
-            msgDiv.className = "msg err";
-          }
-        })
-        .withFailureHandler(function (err) {
-          msgDiv.textContent = "❌ Error: " + err;
-          msgDiv.className = "msg err";
-        })
-        .getMensualizadoGlobal();
+      msgDiv.textContent = "⚠️ El mensualizado global está en migración.";
+      msgDiv.className = "msg warn";
     }
 
     function renderMensualizadoGlobal(meses) {
@@ -1513,24 +1481,8 @@
     function descargarMensualizadoCSV() {
       var msgDiv = document.getElementById("msgMensualizado");
       msgDiv.style.display = "block";
-      msgDiv.textContent = "⏳ Generando archivo CSV...";
-      msgDiv.className = "msg";
-
-      google.script.run
-        .withSuccessHandler(function (res) {
-          if (res.ok) {
-            msgDiv.innerHTML = "✅ Archivo listo: <a href='" + res.url + "' target='_blank'>Descargar CSV</a>";
-            msgDiv.className = "msg ok";
-          } else {
-            msgDiv.textContent = "❌ " + (res.message || "Error generando CSV");
-            msgDiv.className = "msg err";
-          }
-        })
-        .withFailureHandler(function (err) {
-          msgDiv.textContent = "❌ Error: " + err;
-          msgDiv.className = "msg err";
-        })
-        .exportMensualizadoCSV();
+      msgDiv.textContent = "⚠️ La exportación CSV está en migración.";
+      msgDiv.className = "msg warn";
     }
 
     // ==================== DETALLE MENSUALIZADO GLOBAL (NUEVO) ====================
