@@ -15,6 +15,7 @@
     var ALLOWED_DOMAIN = "humboldt.org.co";
     var API_BASE_URL = "";
     var GOOGLE_CLIENT_ID = "";
+    var LOGIN_MESSAGE_DEFAULT = "Ingresa con tu cuenta corporativa para continuar.";
 
     window.onload = function () {
       // Ocultar todo al inicio
@@ -103,11 +104,19 @@
       document.getElementById("paginaInicio").style.display = "none";
       document.getElementById("vistaAccesoDenegado").style.display = "none";
       document.getElementById("vistaLogin").style.display = "flex";
+      setLoginMessage(LOGIN_MESSAGE_DEFAULT);
       inicializarLoginGoogle();
     }
 
     function ocultarLogin() {
       document.getElementById("vistaLogin").style.display = "none";
+    }
+
+    function setLoginMessage(message) {
+      var el = document.getElementById("loginMessage");
+      if (el) {
+        el.textContent = message || LOGIN_MESSAGE_DEFAULT;
+      }
     }
 
     function mostrarAccesoDenegado(mensaje) {
@@ -128,17 +137,20 @@
 
     function inicializarLoginGoogle() {
       if (!window.google || !google.accounts || !google.accounts.id) {
+        setLoginMessage("No se pudo cargar Google Sign-In. Intenta recargar la página.");
         return;
       }
 
       var clientId = cargarGoogleClientId();
       if (!clientId) {
-        mostrarAccesoDenegado("Falta configurar el Client ID de Google para iniciar sesión.");
+        setLoginMessage("Falta configurar el Client ID de Google para iniciar sesión.");
         return;
       }
 
       google.accounts.id.initialize({
         client_id: clientId,
+        auto_select: true,
+        itp_support: true,
         callback: onGoogleCredential
       });
 
@@ -2013,7 +2025,8 @@
     style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:#ffffff;z-index:9999;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;">
     <div style="font-size:48px;margin-bottom:16px;">🔐</div>
     <div style="font-size:22px;font-weight:700;color:var(--primary-dark);margin-bottom:8px;">Inicia sesión</div>
-    <div style="font-size:15px;color:var(--text-muted);max-width:420px;line-height:1.5;margin-bottom:18px;">
+    <div id="loginMessage"
+      style="font-size:15px;color:var(--text-muted);max-width:420px;line-height:1.5;margin-bottom:18px;">
       Ingresa con tu cuenta corporativa para continuar.
     </div>
     <div id="googleSignInButton"></div>
