@@ -137,13 +137,24 @@
       }
 
       return fetch(targetUrl, finalOptions).then(function (res) {
-        return res.json().catch(function () { return {}; }).then(function (payload) {
-          if (!res.ok) {
-            if (res.status === 401 || res.status === 403) {
-              mostrarAccesoDenegado(payload.detail || "Acceso denegado.");
+        return res.text().then(function (rawText) {
+          var payload = {};
+          if (rawText) {
+            try {
+              payload = JSON.parse(rawText);
+            } catch (e) {
+              payload = { detail: rawText };
             }
-            throw new Error(payload.detail || "Error de servidor.");
           }
+
+          if (!res.ok) {
+            var detail = payload.detail || ("HTTP " + res.status);
+            if (res.status === 401 || res.status === 403) {
+              mostrarAccesoDenegado(detail || "Acceso denegado.");
+            }
+            throw new Error(detail || "Error de servidor.");
+          }
+
           return payload;
         });
       });
