@@ -3,8 +3,7 @@ from datetime import date
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import create_engine, text
 from google.cloud.sql.connector import Connector
@@ -21,6 +20,20 @@ ADMIN_EMAILS = {
     ).split(",")
     if email.strip()
 }
+
+cors_origins_raw = os.environ.get("CORS_ORIGINS", "*")
+if cors_origins_raw.strip() == "*":
+    cors_origins = ["*"]
+else:
+    cors_origins = [origin.strip() for origin in cors_origins_raw.split(",") if origin.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- 1. CONEXIÓN A CLOUD SQL ---
 def getconn():
@@ -122,7 +135,7 @@ def mensualizar_base_30(tramos: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 @app.get("/")
 async def read_root():
-    return FileResponse('static/index.html')
+    return {"ok": True, "service": "bosque-api"}
 
 @app.get("/api/financiacion/{cedula}")
 def obtener_financiacion(cedula: str, _user: dict[str, Any] = Depends(get_current_user)):
@@ -394,5 +407,3 @@ def guardar_tramo(
             return {"ok": True, "mensaje": "Guardado exitoso"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-app.mount("/static", StaticFiles(directory="static"), name="static")
