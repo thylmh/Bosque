@@ -1,4 +1,5 @@
 import os
+import uuid
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
@@ -26,6 +27,8 @@ if CORS_ORIGINS_RAW == "*":
     allow_credentials = False
 else:
     cors_origins = [o.strip() for o in CORS_ORIGINS_RAW.split(",") if o.strip()]
+    if "https://storage.googleapis.com" not in cors_origins:
+        cors_origins.append("https://storage.googleapis.com")
     allow_credentials = True
 
 # Audience recomendado: URL del servicio Cloud Run.
@@ -72,7 +75,7 @@ engine = create_engine(
     creator=getconn,
     pool_pre_ping=True,
     pool_size=5,
-    max_overflow=5,
+    max_overflow=10,
 )
 
 
@@ -227,11 +230,11 @@ def mensualizar_base_30(tramos: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     "contrato": tramo.get("id_contrato"),
                     "proyecto": tramo.get("id_proyecto"),
                     "rubro": tramo.get("rubro") or "",
-                    "fuente": tramo.get("id_fuente"),
-                    "componente": tramo.get("id_componente"),
-                    "subcomponente": tramo.get("id_subcomponente"),
-                    "categoria": tramo.get("id_categoria"),
-                    "responsable": tramo.get("id_responsable"),
+                    "fuente": tramo.get("id_fuente") or tramo.get("fuente"),
+                    "componente": tramo.get("id_componente") or tramo.get("componente"),
+                    "subcomponente": tramo.get("id_subcomponente") or tramo.get("subcomponente"),
+                    "categoria": tramo.get("id_categoria") or tramo.get("categoria"),
+                    "responsable": tramo.get("id_responsable") or tramo.get("responsable"),
                     "valor": valor_mes,
                     "dias": dias,
                     "salarioMensual": salario_para_calculo,
@@ -293,9 +296,9 @@ def obtener_financiacion(cedula: str, _user: Dict[str, Any] = Depends(get_curren
             {PAGO_EXPR} AS pago,
             f.rubro, f.id_fuente, f.id_componente, f.id_subcomponente, f.id_categoria, f.id_responsable,
             c.cargo, c.banda, c.familia, c.posicion AS posicion_c,
-            i.anio, i.smlv, i.transporte, i.porcentaje_aumento, i.dotacion,
+            i.anio, i.smlv, i.transporte, i.porcentaje_aumento, i.dotacion AS i_dotacion,
 
-            CEILING((f.salario_base * (COALESCE(i.porcentaje_aumento, 0) / 100)) / 1000) * 1000 AS salario_calc
+            CEILING((f.salario_base * (1 + COALESCE(i.porcentaje_aumento, 0) / 100)) / 1000) * 1000 AS salario_calc
         FROM BFinanciacion f
         LEFT JOIN BContrato c ON f.id_contrato = c.id_contrato
         LEFT JOIN BIncremento i ON YEAR(f.fecha_inicio) = i.anio
@@ -310,7 +313,7 @@ def obtener_financiacion(cedula: str, _user: Dict[str, Any] = Depends(get_curren
             END AS aux_transporte,
             CASE
                 WHEN cargo = 'Lectiva' OR salario_calc > (COALESCE(smlv, 0) * 2) THEN 0
-                ELSE CEILING(COALESCE(dotacion, 0) / 12) * pago
+                ELSE CEILING(COALESCE(i_dotacion, 0) / 12) * pago
             END AS dotacion
         FROM CalculosBase
     ),
@@ -392,7 +395,7 @@ def obtener_financiacion(cedula: str, _user: Dict[str, Any] = Depends(get_curren
     for row in rows:
         d = dict(row)
         for k, v in d.items():
-            if hasattr(v, '__float__'): # Para tipos Decimal
+            if hasattr(v, '__float__') and v is not None:
                 d[k] = float(v)
         tramos.append(d)
 
@@ -431,6 +434,7 @@ def obtener_consulta_individual(
             gerencia,
             area,
             subarea,
+            planta,
             tipo_contrato,
             num_contrato,
             fecha_ingreso,
@@ -458,7 +462,7 @@ def obtener_consulta_individual(
             {PAGO_EXPR} AS pago,
             f.rubro, f.id_fuente, f.id_componente, f.id_subcomponente, f.id_categoria, f.id_responsable,
             c.cargo, c.banda, c.familia, c.posicion AS posicion_c,
-            i.anio, i.smlv, i.transporte, i.porcentaje_aumento, i.dotacion,
+            i.anio, i.smlv, i.transporte, i.porcentaje_aumento, i.dotacion AS i_dotacion,
 
             CEILING((f.salario_base * (1 + COALESCE(i.porcentaje_aumento, 0) / 100)) / 1000) * 1000 AS salario_calc
         FROM BFinanciacion f
@@ -475,7 +479,7 @@ def obtener_consulta_individual(
             END AS aux_transporte,
             CASE
                 WHEN cargo = 'Lectiva' OR salario_calc > (COALESCE(smlv, 0) * 2) THEN 0
-                ELSE CEILING(COALESCE(dotacion, 0) / 12) * pago
+                ELSE CEILING(COALESCE(i_dotacion, 0) / 12) * pago
             END AS dotacion
         FROM CalculosBase
     ),
@@ -556,7 +560,7 @@ def obtener_consulta_individual(
             raise HTTPException(status_code=404, detail="No se encontró el trabajador.")
 
         contrato = conn.execute(contrato_query, {"cedula": cedula}).mappings().first()
-        tramos = conn.execute(tramos_query, {"cedula": cedula}).mappings().all()
+        tramos_rows = conn.execute(tramos_query, {"cedula": cedula}).mappings().all()
 
     nombre_parts = [
         empleado.get("p_nombre"),
@@ -568,11 +572,11 @@ def obtener_consulta_individual(
 
     # Convertimos los resultados a dict y aseguramos que tipos como Decimal sean serializables
     tramos_data = []
-    for tramo in tramos:
-        d = dict(tramo)
+    for row in tramos_rows:
+        d = dict(row)
         # Limpieza de tipos para JSON (Decimal -> float, date -> str)
         for k, v in d.items():
-            if hasattr(v, '__float__'): # Para tipos Decimal
+            if hasattr(v, '__float__') and v is not None: 
                 d[k] = float(v)
         tramos_data.append(d)
 
@@ -583,7 +587,7 @@ def obtener_consulta_individual(
         c_dict = dict(contrato)
         # Limpieza similar para la cabecera
         for k, v in c_dict.items():
-            if hasattr(v, '__float__'):
+            if hasattr(v, '__float__') and v is not None:
                 c_dict[k] = float(v)
         
         cabecera = {
@@ -601,6 +605,7 @@ def obtener_consulta_individual(
             "GERENCIA": c_dict.get("gerencia"),
             "AREA": c_dict.get("area"),
             "SUBAREA": c_dict.get("subarea"),
+            "PLANTA": c_dict.get("planta"),
             "TPLANTA": c_dict.get("tipo_contrato"),
             "NUM_CONTRATO": c_dict.get("num_contrato"),
             "F_CONTRATO": c_dict.get("fecha_ingreso"),
@@ -662,11 +667,7 @@ def guardar_tramo(
                 "id": dato.id,
             }
         else:
-            # Generar ID si es nuevo (ej: UUID o dejar que la DB lo haga si es auto_inc)
-            # En el schema id_financiacion es varchar(50), no parece auto_inc.
-            # Usaremos un prefijo simple o el usuario lo provee? 
-            # AppSheet suele generar IDs únicos. Por ahora generaremos uno simple.
-            import uuid
+            # Generar ID si es nuevo
             new_id = str(uuid.uuid4())[:12]
 
             sql = text("""
@@ -712,3 +713,8 @@ def eliminar_tramo(
         return {"ok": True, "mensaje": "Eliminado con éxito"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)

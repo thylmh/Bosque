@@ -14,7 +14,7 @@
     var USER_EMAIL = "";
     var USER_TOKEN = "";
     var ALLOWED_DOMAIN = "humboldt.org.co";
-    var API_BASE_URL = "";
+    var API_BASE_URL = "https://bosque-api-516412770014.southamerica-east1.run.app";
     var GOOGLE_CLIENT_ID = "516412770014-7btmbo0e2kdj8ictqj3j6ksvfc2gmu8e.apps.googleusercontent.com";
     var LOGIN_MESSAGE_DEFAULT = "Ingresa con tu cuenta corporativa para continuar.";
 
@@ -77,7 +77,13 @@
         })
         .catch(function (err) {
           console.error("❌ Error de autenticación en DB:", err);
-          mostrarAccesoDenegado(err.message || "Tu usuario no está autorizado en la base de datos.");
+          // Si el error es de token (401), simplemente mostramos el login de nuevo
+          if (err.message && (err.message.includes("401") || err.message.includes("expirado") || err.message.includes("inválido"))) {
+            localStorage.removeItem("user_token");
+            mostrarLogin();
+          } else {
+            mostrarAccesoDenegado(err.message || "Tu usuario no está autorizado en la base de datos.");
+          }
         });
     }
 
@@ -242,7 +248,11 @@
 
           if (!res.ok) {
             var detail = payload.detail || ("HTTP " + res.status);
-            if (res.status === 401 || res.status === 403) {
+            if (res.status === 401) {
+              localStorage.removeItem("user_token");
+              mostrarLogin();
+              setLoginMessage("Tu sesión ha expirado. Por favor ingresa de nuevo.");
+            } else if (res.status === 403) {
               mostrarAccesoDenegado(detail || "Acceso denegado.");
             }
             throw new Error(detail || "Error de servidor.");
