@@ -3,52 +3,28 @@
 
 <head>
   <base target="_top">
+  <meta charset="UTF-8">
   <title>Guadua - Planeación de Nómina</title>
-  <?!= include('Css'); ?>
+  <link rel="stylesheet" href="app.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 
   <script>
     // ==================== VARIABLES GLOBALES ====================
     var USER_AUTHORIZED = false;
+    var USER_EMAIL = "";
+    var USER_TOKEN = "";
+    var ALLOWED_DOMAIN = "humboldt.org.co";
+    var API_BASE_URL = "";
+    var GOOGLE_CLIENT_ID = "516412770014-7btmbo0e2kdj8ictqj3j6ksvfc2gmu8e.apps.googleusercontent.com";
+    var LOGIN_MESSAGE_DEFAULT = "Ingresa con tu cuenta corporativa para continuar.";
 
     window.onload = function () {
       // Ocultar todo al inicio
+      document.getElementById("vistaLogin").style.display = "none";
       document.getElementById("paginaInicio").style.display = "none";
       document.getElementById("seccionConsulta").style.display = "none";
       document.getElementById("vistaGlobal").style.display = "none";
-
-      google.script.run
-        .withSuccessHandler(function (user) {
-          if (user && user.authorized) {
-            USER_AUTHORIZED = true;
-            // Usuario autorizado: Mostrar página de inicio normal
-            document.getElementById("paginaInicio").style.display = "block";
-
-            // Habilitar botones
-            var btns = document.querySelectorAll(".menu-card");
-            btns.forEach(function (btn) { btn.classList.remove("disabled"); });
-
-            // Opcional: Mostrar correo usuario
-            if (document.getElementById("userEmail")) {
-              document.getElementById("userEmail").textContent = user.email || "Desconocido";
-            }
-
-            // Cargar catálogos
-            asegurarCatalogos().then(function () {
-              poblarSelects();
-            });
-
-          } else {
-            // Usuario NO autorizado
-            USER_AUTHORIZED = false;
-            document.getElementById("paginaInicio").style.display = "none";
-            document.getElementById("vistaAccesoDenegado").style.display = "flex";
-            document.getElementById("msgDenegado").textContent = "No tienes permiso para acceder a esta aplicación (" + (user ? user.email : "Desconocido") + ").";
-          }
-        })
-        .withFailureHandler(function (err) {
-          alert("Error de conexión: " + err);
-        })
-        .getLoggedUser();
+      inicializarSesion();
     };
 
     var CATS = { proyectos: [], fuentes: [], componentes: [], subcomponentes: [], categorias: [], responsables: [] };
@@ -59,6 +35,223 @@
     var CATALOGOS_CARGADOS = false;
     var DATOS_ACTUAL = null;
     var MENSUALIZADO_GLOBAL_CACHE = null;
+
+    function inicializarSesion() {
+      var email = cargarEmail();
+      var token = cargarToken();
+      if (!email || !token) {
+        mostrarLogin();
+        return;
+      }
+
+      var apiBaseUrl = cargarApiBaseUrl();
+      if (!apiBaseUrl) {
+        apiBaseUrl = solicitarApiBaseUrl();
+        if (!apiBaseUrl) {
+          mostrarAccesoDenegado("Debes ingresar la URL del backend para continuar.");
+          return;
+        }
+      }
+
+      // Llamar al backend para VERIFICAR si el usuario está en la base de datos (BWhitelist)
+      // Esto responde a la necesidad del usuario de que el login consulte la base de datos
+      apiFetch("/api/me")
+        .then(function (res) {
+          console.log("✅ Usuario verificado en DB:", res);
+          ocultarLogin();
+          USER_EMAIL = email;
+          USER_TOKEN = token;
+          USER_AUTHORIZED = true;
+          document.getElementById("paginaInicio").style.display = "block";
+
+          var btns = document.querySelectorAll(".menu-card");
+          btns.forEach(function (btn) { btn.classList.remove("disabled"); });
+
+          if (document.getElementById("userEmail")) {
+            document.getElementById("userEmail").textContent = email || "Desconocido";
+          }
+
+          asegurarCatalogos().then(function () {
+            poblarSelects();
+          });
+        })
+        .catch(function (err) {
+          console.error("❌ Error de autenticación en DB:", err);
+          mostrarAccesoDenegado(err.message || "Tu usuario no está autorizado en la base de datos.");
+        });
+    }
+
+    function cargarEmail() {
+      return localStorage.getItem("user_email") || "";
+    }
+
+    function guardarSesion(email, token) {
+      localStorage.setItem("user_email", email);
+      localStorage.setItem("user_token", token);
+    }
+
+    function cargarToken() {
+      return localStorage.getItem("user_token") || "";
+    }
+
+    function cargarGoogleClientId() {
+      return localStorage.getItem("google_client_id") || GOOGLE_CLIENT_ID || "";
+    }
+
+    function cargarApiBaseUrl() {
+      return localStorage.getItem("api_base_url") || API_BASE_URL || "";
+    }
+
+    function guardarApiBaseUrl(url) {
+      localStorage.setItem("api_base_url", url);
+    }
+
+    function solicitarApiBaseUrl() {
+      var url = prompt("Ingresa la URL del backend (Cloud Run), ej: https://bosque-api-xyz.a.run.app");
+      if (!url) return "";
+      url = String(url).trim().replace(/\/+$/, "");
+      if (!url.startsWith("http")) {
+        return "";
+      }
+      guardarApiBaseUrl(url);
+      return url;
+    }
+
+    function mostrarLogin() {
+      USER_AUTHORIZED = false;
+      document.getElementById("paginaInicio").style.display = "none";
+      document.getElementById("vistaAccesoDenegado").style.display = "none";
+      document.getElementById("vistaLogin").style.display = "flex";
+      setLoginMessage(LOGIN_MESSAGE_DEFAULT);
+      inicializarLoginGoogle();
+    }
+
+    function ocultarLogin() {
+      document.getElementById("vistaLogin").style.display = "none";
+    }
+
+    function setLoginMessage(message) {
+      var el = document.getElementById("loginMessage");
+      if (el) {
+        el.textContent = message || LOGIN_MESSAGE_DEFAULT;
+      }
+    }
+
+    function mostrarAccesoDenegado(mensaje) {
+      USER_AUTHORIZED = false;
+      document.getElementById("paginaInicio").style.display = "none";
+      document.getElementById("vistaAccesoDenegado").style.display = "flex";
+      document.getElementById("msgDenegado").textContent = mensaje || "No tienes permiso para acceder a esta aplicación.";
+    }
+
+    function parseJwt(token) {
+      var base64Url = token.split(".")[1];
+      var base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+      var jsonPayload = decodeURIComponent(atob(base64).split("").map(function (c) {
+        return "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2);
+      }).join(""));
+      return JSON.parse(jsonPayload);
+    }
+
+    function inicializarLoginGoogle() {
+      if (!window.google || !google.accounts || !google.accounts.id) {
+        setLoginMessage("No se pudo cargar Google Sign-In. Verifica bloqueadores de anuncios y recarga la página.");
+        return;
+      }
+
+      var clientId = cargarGoogleClientId();
+      if (!clientId || clientId.indexOf("TU_CLIENT_ID") !== -1) {
+        setLoginMessage("Configura un Client ID real de Google (no uses TU_CLIENT_ID) para iniciar sesión.");
+        return;
+      }
+
+      google.accounts.id.initialize({
+        client_id: clientId,
+        auto_select: true,
+        itp_support: true,
+        callback: onGoogleCredential
+      });
+
+      google.accounts.id.renderButton(
+        document.getElementById("googleSignInButton"),
+        { theme: "outline", size: "large", width: 280 }
+      );
+      google.accounts.id.prompt();
+    }
+
+    function onGoogleCredential(response) {
+      if (!response || !response.credential) {
+        mostrarAccesoDenegado("No se pudo validar el inicio de sesión.");
+        return;
+      }
+
+      var payload = parseJwt(response.credential);
+      var email = String(payload.email || "").trim().toLowerCase();
+      if (!email || !email.endsWith("@" + ALLOWED_DOMAIN)) {
+        mostrarAccesoDenegado("Debes iniciar sesión con tu correo corporativo.");
+        return;
+      }
+
+      guardarSesion(email, response.credential);
+      inicializarSesion();
+    }
+
+    function apiFetch(path, options) {
+      var apiBaseUrl = cargarApiBaseUrl();
+      if (!apiBaseUrl && path && path.indexOf("http") !== 0) {
+        apiBaseUrl = solicitarApiBaseUrl();
+      }
+
+      var email = USER_EMAIL || cargarEmail();
+      var token = USER_TOKEN || cargarToken();
+      if (!email || !token) {
+        mostrarLogin();
+        return Promise.reject(new Error("Debe iniciar sesión"));
+      }
+
+      var finalOptions = options || {};
+      finalOptions.headers = Object.assign({}, finalOptions.headers, {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + token
+      });
+
+      var targetUrl = path;
+      if (apiBaseUrl && path && path.indexOf("http") !== 0) {
+        targetUrl = apiBaseUrl + path;
+      }
+
+      // Validar que si estamos en HTTPS, el backend sea HTTPS
+      if (window.location.protocol === "https:" && targetUrl.startsWith("http:")) {
+        console.warn("⚠️ Forzando HTTPS para evitar error de Contenido Mixto");
+        targetUrl = targetUrl.replace("http:", "https:");
+      }
+
+      console.log("🚀 API Request:", targetUrl, finalOptions);
+
+      return fetch(targetUrl, finalOptions).then(function (res) {
+        console.log("⬅️ API Response Status:", res.status);
+        return res.text().then(function (rawText) {
+          var payload = {};
+          if (rawText) {
+            try {
+              payload = JSON.parse(rawText);
+            } catch (e) {
+              payload = { detail: rawText };
+            }
+          }
+
+          if (!res.ok) {
+            var detail = payload.detail || ("HTTP " + res.status);
+            if (res.status === 401 || res.status === 403) {
+              mostrarAccesoDenegado(detail || "Acceso denegado.");
+            }
+            throw new Error(detail || "Error de servidor.");
+          }
+
+          return payload;
+        });
+      });
+    }
 
     // ==================== NAVEGACIÓN ====================
     function irAConsultaEmpleado() {
@@ -237,19 +430,8 @@
           return;
         }
 
-        google.script.run
-          .withSuccessHandler(function (data) {
-            hydrateCatalogs(data);
-            setCatalogCache_(data);
-            CATALOGOS_CARGADOS = true;
-            resolve(data);
-          })
-          .withFailureHandler(function (err) {
-            console.warn("Error cargando catálogos:", err);
-            CATALOGOS_CARGADOS = true;
-            resolve(CATS);
-          })
-          .getCatalogosFinanciacion();
+        CATALOGOS_CARGADOS = true;
+        resolve(CATS);
       });
     }
 
@@ -265,17 +447,22 @@
       btn.textContent = "Consultando...";
 
       function ejecutarConsulta() {
-        google.script.run
-          .withSuccessHandler(function (res) {
+        apiFetch("/api/consulta/" + encodeURIComponent(cedula))
+          .then(function (res) {
             btn.disabled = false;
             btn.textContent = "🔍 Buscar";
-            if (!res || !res.ok) { setMsg(res?.message || "Error", "warn"); return; }
 
+            if (!res || !res.ok) {
+              setMsg(res && res.message ? res.message : "Error", "warn");
+              return;
+            }
+
+            res.tramos = normalizarTramos(res.tramos || []);
             DATOS_ACTUAL = res;
             document.getElementById("tabNavigation").style.display = "block";
             showSections(true);
 
-            renderEmpleadoSimple(res.empleado, res.cabecera);
+            renderEmpleadoSimple(res.empleado, res.cabecera, res.tramos);
             renderTramos(res.tramos);
             renderMensual(res.months);
             renderResumen(res);
@@ -283,12 +470,11 @@
             setMsg("✅ Datos cargados: " + res.tramos.length + " tramo(s)", "ok");
             console.log("✅ Búsqueda exitosa");
           })
-          .withFailureHandler(function (err) {
+          .catch(function (err) {
             btn.disabled = false;
             btn.textContent = "🔍 Buscar";
-            setMsg("Error: " + err, "err");
-          })
-          .getVistaFinanciacion({ cedula: cedula });
+            setMsg("Error: " + err.message, "err");
+          });
       }
 
       asegurarCatalogos()
@@ -299,7 +485,43 @@
         });
     }
 
-    function renderEmpleadoSimple(emp, con) {
+    function normalizarTramos(tramos) {
+      return (tramos || []).map(function (t) {
+        return {
+          id: t.id_financiacion || t.id,
+          contrato: t.id_contrato || t.contrato,
+          posicion: t.posicion,
+          fechaInicio: t.fecha_inicio || t.fechaInicio,
+          fechaFin: t.fecha_fin || t.fechaFin,
+          salarioEditable: t.salario_base || t.salarioEditable,
+          salarioCalculado: t.salario_t || t.salarioCalculado,
+          rubro: t.rubro || "",
+          proyecto: t.id_proyecto || t.proyecto,
+          fuente: t.id_fuente || t.fuente,
+          componente: t.id_componente || t.componente,
+          subcomponente: t.id_subcomponente || t.subcomponente,
+          categoria: t.id_categoria || t.categoria,
+          responsable: t.id_responsable || t.responsable,
+          // Mapeo corregido para coincidir con el nuevo SQL de main.py
+          Salario_Calc: t.salario_calc,
+          Aux_Transporte: t.aux_transporte,
+          Dotacion: t.dotacion,
+          PrimaS: t.primas,
+          SVacaciones: t.s_vacaciones,
+          Sueldo_Vacaciones: t.sueldo_vacaciones,
+          Cesantias: t.cesantias,
+          ICesantias: t.i_cesantias,
+          Salud: t.salud,
+          Pension: t.pension,
+          CCF: t.ccf,
+          SENA: t.sena,
+          ICBF: t.icbf,
+          salario_t: t.salario_t
+        };
+      });
+    }
+
+    function renderEmpleadoSimple(emp, con, tramos) {
       var box = document.getElementById("kpiBox");
       if (!box) return;
 
@@ -374,16 +596,30 @@
       html += '<div class="claude-grid">';
 
       var camposSalarial = [
-        { label: "SALARIO", valor: con.SALARIO, tipo: "moneda" },
+        { label: "SALARIO BASE", valor: con.SALARIO, tipo: "moneda" },
+        { label: "SALARIO CALCULADO", valor: tramos[0]?.Salario_Calc, tipo: "moneda" },
+        { label: "AUXILIO DE TRANSPORTE", valor: tramos[0]?.Aux_Transporte, tipo: "moneda" },
+        { label: "DOTACIÓN", valor: tramos[0]?.Dotacion, tipo: "moneda" },
+        { label: "PRIMA DE SERVICIOS", valor: tramos[0]?.PrimaS, tipo: "moneda" },
+        { label: "VACACIONES", valor: tramos[0]?.SVacaciones, tipo: "moneda" },
+        { label: "SUELDO DE VACACIONES", valor: tramos[0]?.Sueldo_Vacaciones, tipo: "moneda" },
+        { label: "CESANTÍAS", valor: tramos[0]?.Cesantias, tipo: "moneda" },
+        { label: "INTERESES CESANTÍAS", valor: tramos[0]?.ICesantias, tipo: "moneda" },
+        { label: "SALUD", valor: tramos[0]?.Salud, tipo: "moneda" },
+        { label: "PENSIÓN", valor: tramos[0]?.Pension, tipo: "moneda" },
+        { label: "CAJA DE COMPENSACIÓN", valor: tramos[0]?.CCF, tipo: "moneda" },
+        { label: "SENA", valor: tramos[0]?.SENA, tipo: "moneda" },
+        { label: "ICBF", valor: tramos[0]?.ICBF, tipo: "moneda" },
         { label: "NIVEL RIESGO", valor: con.NIVEL_RIESGO },
-        { label: "ATEP", valor: con.ATEP, tipo: "porcentaje" }
+        { label: "ATEP", valor: con.ATEP, tipo: "porcentaje" },
+        { label: "💰 TOTAL CARGA SALARIAL", valor: tramos[0]?.salario_t, tipo: "moneda", destacado: true }
       ];
 
       camposSalarial.forEach(function (c) {
         var display = c.valor || "---";
         if (c.valor) {
           if (c.tipo === "moneda") {
-            display = c.label === "SALARIO" ? maskMoney() : money(c.valor);
+            display = c.label === "SALARIO BASE" ? maskMoney() : money(c.valor);
           } else if (c.tipo === "porcentaje") {
             if (!String(c.valor).includes("%") && !isNaN(c.valor)) {
               display = (parseFloat(c.valor) * 100).toFixed(2) + "%";
@@ -392,7 +628,8 @@
             }
           }
         }
-        html += '<div class="claude-card">';
+        var cardStyle = c.destacado ? ' style="background:var(--primary);color:white;font-weight:bold;"' : '';
+        html += '<div class="claude-card"' + cardStyle + '>';
         html += '<div class="claude-label">' + c.label + '</div>';
         html += '<div class="claude-value">' + display + '</div>';
         html += '</div>';
@@ -557,33 +794,12 @@
       var msgDiv = document.getElementById("msgGlobal");
       var btnCargar = event.target;
 
-      msgDiv.innerHTML = "⏳ Cargando datos de toda la organización...";
-      msgDiv.className = "msg";
+      msgDiv.innerHTML = "⚠️ El dashboard global está en migración.";
+      msgDiv.className = "msg warn";
       msgDiv.style.display = "block";
-      btnCargar.disabled = true;
-      btnCargar.textContent = "Cargando...";
+      btnCargar.disabled = false;
+      btnCargar.textContent = "📊 Cargar Dashboard Global";
       container.innerHTML = "";
-
-      google.script.run
-        .withSuccessHandler(function (res) {
-          btnCargar.disabled = false;
-          btnCargar.textContent = "🔄 Recargar Dashboard Global";
-
-          if (res && res.ok) {
-            generarDashboardGlobal(res.data);
-            msgDiv.style.display = "none";
-          } else {
-            msgDiv.innerHTML = "❌ Error: " + (res?.message || "Sin datos");
-            msgDiv.className = "msg err";
-          }
-        })
-        .withFailureHandler(function (err) {
-          btnCargar.disabled = false;
-          btnCargar.textContent = "📊 Cargar Dashboard Global";
-          msgDiv.innerHTML = "❌ Error: " + err;
-          msgDiv.className = "msg err";
-        })
-        .getDashboardGlobal();
     }
 
     function generarDashboardGlobal(data) {
@@ -713,20 +929,7 @@
         container.innerHTML = "<div class='msg warn'>Selecciona un proyecto válido.</div>";
         return;
       }
-      container.innerHTML = "⏳ Cargando detalle del proyecto...";
-
-      google.script.run
-        .withSuccessHandler(function (res) {
-          if (!res || !res.ok) {
-            container.innerHTML = "<div class='msg err'>❌ Error: " + (res?.message || "Sin datos") + "</div>";
-            return;
-          }
-          renderDetalleProyectoGlobal(res.data);
-        })
-        .withFailureHandler(function (err) {
-          container.innerHTML = "<div class='msg err'>❌ Error: " + err + "</div>";
-        })
-        .getDashboardDetalleProyecto({ proyecto: proyecto });
+      container.innerHTML = "<div class='msg warn'>Detalle de proyecto en migración.</div>";
     }
 
     function renderDetalleProyectoGlobal(data) {
@@ -798,20 +1001,7 @@
 
     function cargarEmpleadosGlobal() {
       var container = document.getElementById("empleadosGlobalContainer");
-      container.innerHTML = "⏳ Cargando empleados globales...";
-
-      google.script.run
-        .withSuccessHandler(function (res) {
-          if (!res || !res.ok) {
-            container.innerHTML = "<div class='msg err'>❌ Error: " + (res?.message || "Sin datos") + "</div>";
-            return;
-          }
-          renderEmpleadosGlobal(res.data);
-        })
-        .withFailureHandler(function (err) {
-          container.innerHTML = "<div class='msg err'>❌ Error: " + err + "</div>";
-        })
-        .getDashboardEmpleadosGlobal();
+      container.innerHTML = "<div class='msg warn'>Módulo de empleados globales en migración.</div>";
     }
 
     function renderEmpleadosGlobal(data) {
@@ -993,20 +1183,7 @@
     function cargarTotalesPorDireccion() {
       var container = document.getElementById("direccionTotalesContainer");
       if (!container) return;
-      container.innerHTML = "⏳ Cargando totales por dirección...";
-
-      google.script.run
-        .withSuccessHandler(function (res) {
-          if (!res || !res.ok) {
-            container.innerHTML = "<div class='msg err'>❌ Error: " + (res?.message || "Sin datos") + "</div>";
-            return;
-          }
-          renderTotalesPorDireccion(res.data);
-        })
-        .withFailureHandler(function (err) {
-          container.innerHTML = "<div class='msg err'>❌ Error: " + err + "</div>";
-        })
-        .getDashboardDireccionTotales();
+      container.innerHTML = "<div class='msg warn'>Totales por dirección en migración.</div>";
     }
 
     function renderTotalesPorDireccion(data) {
@@ -1306,8 +1483,6 @@
       var datos = {
         id: document.getElementById("formId").value,
         cedula: DATOS_ACTUAL.empleado.cedula,
-        contrato: DATOS_ACTUAL.cabecera ? DATOS_ACTUAL.cabecera.IDCONTRATO : "",
-        posicion: DATOS_ACTUAL.cabecera ? DATOS_ACTUAL.cabecera.POSICION : "",
         fechaInicio: document.getElementById("formFechaInicio").value,
         fechaFin: document.getElementById("formFechaFin").value,
         salario: document.getElementById("formSalario").value,
@@ -1324,8 +1499,11 @@
       btnGuardar.disabled = true;
       btnGuardar.textContent = "Guardando...";
 
-      google.script.run
-        .withSuccessHandler(function (res) {
+      apiFetch("/api/guardar", {
+        method: "POST",
+        body: JSON.stringify(datos)
+      })
+        .then(function (res) {
           btnGuardar.disabled = false;
           btnGuardar.textContent = "💾 Guardar";
 
@@ -1336,12 +1514,11 @@
             alert("Error: " + (res?.message || "Error desconocido"));
           }
         })
-        .withFailureHandler(function (err) {
+        .catch(function (err) {
           btnGuardar.disabled = false;
           btnGuardar.textContent = "💾 Guardar";
-          alert("Error: " + err);
-        })
-        .guardarTramoFinanciacion(datos);
+          alert("Error: " + err.message);
+        });
     }
 
     function confirmarEliminar(id) {
@@ -1361,24 +1538,22 @@
       btnEliminar.disabled = true;
       btnEliminar.textContent = "Eliminando...";
 
-      google.script.run
-        .withSuccessHandler(function (res) {
+      apiFetch("/api/borrar/" + encodeURIComponent(ID_A_BORRAR), { method: "DELETE" })
+        .then(function (res) {
           btnEliminar.disabled = false;
           btnEliminar.textContent = "🗑️ Eliminar";
           cerrarModalConfirmar();
-
           if (res && res.ok) {
-            buscar(); // Recargar datos
+            buscar();
           } else {
-            alert("Error: " + (res?.message || "Error desconocido"));
+            alert("Error al eliminar: " + (res?.message || "Error desconocido"));
           }
         })
-        .withFailureHandler(function (err) {
+        .catch(function (err) {
           btnEliminar.disabled = false;
           btnEliminar.textContent = "🗑️ Eliminar";
-          alert("Error: " + err);
-        })
-        .eliminarTramoFinanciacion(ID_A_BORRAR);
+          alert("Error: " + err.message);
+        });
     }
 
     function verDetalleMes(anioMes) {
@@ -1465,24 +1640,8 @@
     function cargarMensualizadoGlobal() {
       var msgDiv = document.getElementById("msgMensualizado");
       msgDiv.style.display = "block";
-      msgDiv.textContent = "⏳ Cargando datos...";
-      msgDiv.className = "msg";
-
-      google.script.run
-        .withSuccessHandler(function (res) {
-          if (res.ok) {
-            renderMensualizadoGlobal(res.data);
-            msgDiv.style.display = "none";
-          } else {
-            msgDiv.textContent = "❌ " + (res.message || "Error al cargar datos");
-            msgDiv.className = "msg err";
-          }
-        })
-        .withFailureHandler(function (err) {
-          msgDiv.textContent = "❌ Error: " + err;
-          msgDiv.className = "msg err";
-        })
-        .getMensualizadoGlobal();
+      msgDiv.textContent = "⚠️ El mensualizado global está en migración.";
+      msgDiv.className = "msg warn";
     }
 
     function renderMensualizadoGlobal(meses) {
@@ -1513,24 +1672,8 @@
     function descargarMensualizadoCSV() {
       var msgDiv = document.getElementById("msgMensualizado");
       msgDiv.style.display = "block";
-      msgDiv.textContent = "⏳ Generando archivo CSV...";
-      msgDiv.className = "msg";
-
-      google.script.run
-        .withSuccessHandler(function (res) {
-          if (res.ok) {
-            msgDiv.innerHTML = "✅ Archivo listo: <a href='" + res.url + "' target='_blank'>Descargar CSV</a>";
-            msgDiv.className = "msg ok";
-          } else {
-            msgDiv.textContent = "❌ " + (res.message || "Error generando CSV");
-            msgDiv.className = "msg err";
-          }
-        })
-        .withFailureHandler(function (err) {
-          msgDiv.textContent = "❌ Error: " + err;
-          msgDiv.className = "msg err";
-        })
-        .exportMensualizadoCSV();
+      msgDiv.textContent = "⚠️ La exportación CSV está en migración.";
+      msgDiv.className = "msg warn";
     }
 
     // ==================== DETALLE MENSUALIZADO GLOBAL (NUEVO) ====================
@@ -1953,6 +2096,17 @@
     </div>
   </div>
 
+  <!-- ========== VISTA LOGIN ========== -->
+  <div id="vistaLogin"
+    style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:#ffffff;z-index:9999;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;">
+    <div style="font-size:48px;margin-bottom:16px;">🔐</div>
+    <div style="font-size:22px;font-weight:700;color:var(--primary-dark);margin-bottom:8px;">Inicia sesión</div>
+    <div id="loginMessage"
+      style="font-size:15px;color:var(--text-muted);max-width:420px;line-height:1.5;margin-bottom:18px;">
+      Ingresa con tu cuenta corporativa para continuar.
+    </div>
+    <div id="googleSignInButton"></div>
+  </div>
 
   <!-- ========== VISTA ACCESO DENEGADO ========== -->
   <div id="vistaAccesoDenegado"

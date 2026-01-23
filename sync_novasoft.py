@@ -14,7 +14,7 @@ ERP_DB   = "Novasoft_Ent"
 # Google Cloud SQL
 INSTANCE_CONNECTION_NAME = "bosque-485105:southamerica-east1:bosquebd" # Ver en consola de Cloud SQL
 CLOUD_USER = "bosquebd"
-CLOUD_PASS = """;pFp:E>9o=h"KbBy""" 
+CLOUD_PASS = "BosqueDB2026!" 
 CLOUD_DB   = "bosquebd"
 
 # 2. MAPEO DE TABLAS (Origen Novasoft: Destino Cloud)
